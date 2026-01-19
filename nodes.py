@@ -48,7 +48,7 @@ except ImportError:
 # =============================================================================
 
 # This carries all context through the workflow
-# FLOW_PIPE contains: session, project, shot, task, user, version info, filename template
+# FLOW_CONTEXT contains: session, project, shot, task, user, version info, filename template
 
 _flow_sessions = {}  # Cache for sessions
 
@@ -64,7 +64,7 @@ class FlowLogin:
     Credentials can be provided directly or via environment variables.
     """
     
-    CATEGORY = "VFX Flow/Connection"
+    CATEGORY = "VFX Flow"
     FUNCTION = "login"
     RETURN_TYPES = ("FLOW_SESSION", "STRING",)
     RETURN_NAMES = ("session", "status",)
@@ -148,13 +148,13 @@ class FlowLogin:
 class ProjectBrowser:
     """
     Browse and select a project from Flow.
-    Shows only active projects.
+    Shows only active projects. Type part of the project name to filter.
     """
     
-    CATEGORY = "VFX Flow/Browse"
+    CATEGORY = "VFX Flow"
     FUNCTION = "browse"
-    RETURN_TYPES = ("FLOW_PIPE", "STRING",)
-    RETURN_NAMES = ("pipe", "info",)
+    RETURN_TYPES = ("FLOW_CONTEXT", "STRING",)
+    RETURN_NAMES = ("flow", "info",)
     OUTPUT_NODE = True
     
     @classmethod
@@ -162,19 +162,21 @@ class ProjectBrowser:
         return {
             "required": {
                 "session": ("FLOW_SESSION",),
-                "project_name": ("STRING", {"default": ""}),
+            },
+            "optional": {
+                "filter": ("STRING", {"default": "", "placeholder": "Project name filter..."}),
             },
         }
     
-    def browse(self, session, project_name: str):
+    def browse(self, session, filter: str = ""):
         if session is None:
-            return (None, "ERROR: No Flow session")
+            return (None, "❌ No Flow session - connect Flow Login first")
         
         try:
             # Find projects
             filters = [["sg_status", "is", "Active"]]
-            if project_name:
-                filters.append(["name", "contains", project_name])
+            if filter:
+                filters.append(["name", "contains", filter])
             
             projects = session.find(
                 "Project",
@@ -183,13 +185,13 @@ class ProjectBrowser:
             )
             
             if not projects:
-                return (None, "No projects found")
+                return (None, "❌ No projects found")
             
-            # Use first match or list all
+            # Use first match
             project = projects[0]
             
-            # Build pipe
-            pipe = {
+            # Build context (internal, not shown to user as "flow")
+            context = {
                 "session": session,
                 "project": {
                     "id": project["id"],
@@ -199,24 +201,26 @@ class ProjectBrowser:
                 "task": None,
                 "user": None,
                 "version_number": 1,
-                "filename_template": "{project}_{sequence}_{shot}_{task}_v{version:03d}",
                 "resolved_filename": None,
             }
             
-            # Build info
-            info_lines = [f"Project: {project['name']}"]
+            # Build info - show all available projects
+            info_lines = [f"✓ Selected: {project['name']}", ""]
             if len(projects) > 1:
-                info_lines.append(f"\nOther matches ({len(projects)-1}):")
-                for p in projects[1:5]:
-                    info_lines.append(f"  - {p['name']}")
+                info_lines.append(f"Available projects ({len(projects)}):")
+                for p in projects[:10]:
+                    marker = "→" if p["id"] == project["id"] else " "
+                    info_lines.append(f"  {marker} {p['name']}")
+                if len(projects) > 10:
+                    info_lines.append(f"  ... and {len(projects)-10} more")
             
             info = "\n".join(info_lines)
             print(f"[VFX Flow] Selected project: {project['name']}")
             
-            return (pipe, info)
+            return (context, info)
             
         except Exception as e:
-            return (None, f"ERROR: {str(e)}")
+            return (None, f"❌ Error: {str(e)}")
 
 
 # =============================================================================
@@ -230,17 +234,17 @@ class ShotBrowser:
     Outputs folder_path for direct connection to VFX Bridge EXR Loader.
     """
     
-    CATEGORY = "VFX Flow/Browse"
+    CATEGORY = "VFX Flow"
     FUNCTION = "browse"
-    RETURN_TYPES = ("FLOW_PIPE", "STRING", "STRING", "STRING",)
-    RETURN_NAMES = ("pipe", "folder_path", "latest_file", "info",)
+    RETURN_TYPES = ("FLOW_CONTEXT", "STRING", "STRING", "STRING",)
+    RETURN_NAMES = ("flow", "folder_path", "latest_file", "info",)
     OUTPUT_NODE = True
     
     @classmethod
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "pipe": ("FLOW_PIPE",),
+                "flow": ("FLOW_CONTEXT",),
                 "shot_code": ("STRING", {"default": ""}),
             },
             "optional": {
@@ -248,15 +252,15 @@ class ShotBrowser:
             },
         }
     
-    def browse(self, pipe, shot_code: str, set_in_progress: bool = True):
-        if pipe is None:
-            return (None, "", "", "ERROR: No pipe data")
+    def browse(self, flow, shot_code: str, set_in_progress: bool = True):
+        if flow is None:
+            return (None, "", "", "ERROR: No flow data")
         
-        session = pipe.get("session")
-        project = pipe.get("project")
+        session = flow.get("session")
+        project = flow.get("project")
         
         if not session or not project:
-            return (None, "", "", "ERROR: Invalid pipe data")
+            return (None, "", "", "ERROR: Invalid flow data")
         
         try:
             # Find shots
@@ -271,7 +275,7 @@ class ShotBrowser:
             )
             
             if not shots:
-                return (pipe, "", "", "No shots found")
+                return (flow, "", "", "No shots found")
             
             shot = shots[0]
             sequence = shot.get("sg_sequence", {})
@@ -303,7 +307,7 @@ class ShotBrowser:
                     folder_path = os.path.dirname(latest_file)
             
             # Update pipe
-            pipe = pipe.copy()
+            pipe = flow.copy()
             pipe["shot"] = {
                 "id": shot["id"],
                 "code": shot["code"],
@@ -328,10 +332,10 @@ class ShotBrowser:
                 info_lines.append(f"Latest: {os.path.basename(latest_file)}")
             
             info = "\n".join(info_lines)
-            return (pipe, folder_path, latest_file, info)
+            return (flow, folder_path, latest_file, info)
             
         except Exception as e:
-            return (pipe, "", "", f"ERROR: {str(e)}")
+            return (flow, "", "", f"ERROR: {str(e)}")
 
 
 # =============================================================================
@@ -343,17 +347,17 @@ class TaskSelector:
     Select a task for the shot and assign yourself.
     """
     
-    CATEGORY = "VFX Flow/Browse"
+    CATEGORY = "VFX Flow"
     FUNCTION = "select"
-    RETURN_TYPES = ("FLOW_PIPE", "STRING",)
-    RETURN_NAMES = ("pipe", "info",)
+    RETURN_TYPES = ("FLOW_CONTEXT", "STRING",)
+    RETURN_NAMES = ("flow", "info",)
     OUTPUT_NODE = True
     
     @classmethod
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "pipe": ("FLOW_PIPE",),
+                "flow": ("FLOW_CONTEXT",),
                 "task_name": ("STRING", {"default": "comp"}),
             },
             "optional": {
@@ -361,15 +365,15 @@ class TaskSelector:
             },
         }
     
-    def select(self, pipe, task_name: str, assign_to_me: bool = True):
-        if pipe is None:
-            return (None, "ERROR: No pipe data")
+    def select(self, flow, task_name: str, assign_to_me: bool = True):
+        if flow is None:
+            return (None, "ERROR: No flow data")
         
-        session = pipe.get("session")
-        shot = pipe.get("shot")
+        session = flow.get("session")
+        shot = flow.get("shot")
         
         if not session or not shot:
-            return (pipe, "ERROR: Need shot selected first")
+            return (flow, "ERROR: Need shot selected first")
         
         try:
             # Find task
@@ -383,7 +387,7 @@ class TaskSelector:
             )
             
             if not tasks:
-                return (pipe, f"No task '{task_name}' found on shot {shot['code']}")
+                return (flow, f"No task '{task_name}' found on shot {shot['code']}")
             
             task = tasks[0]
             
@@ -414,7 +418,7 @@ class TaskSelector:
                     pass
             
             # Update pipe
-            pipe = pipe.copy()
+            pipe = flow.copy()
             pipe["task"] = {
                 "id": task["id"],
                 "name": task["content"],
@@ -425,15 +429,15 @@ class TaskSelector:
             }
             
             # Update resolved filename with task
-            project = pipe.get("project", {})
-            shot_data = pipe.get("shot", {})
+            project = flow.get("project", {})
+            shot_data = flow.get("shot", {})
             pipe["resolved_filename"] = f"{project.get('name', 'proj')}_{shot_data.get('sequence', 'SEQ')}_{shot_data.get('code', 'shot')}_{task['content']}_v{pipe['version_number']:03d}"
             
             info = f"Task: {task['content']}\nAssigned to: {user_name}\nFilename: {pipe['resolved_filename']}"
-            return (pipe, info)
+            return (flow, info)
             
         except Exception as e:
-            return (pipe, f"ERROR: {str(e)}")
+            return (flow, f"ERROR: {str(e)}")
 
 
 # =============================================================================
@@ -446,7 +450,7 @@ class PublishToFlow:
     Only publishes when the publish button is clicked (auto_publish=False).
     """
     
-    CATEGORY = "VFX Flow/Publish"
+    CATEGORY = "VFX Flow"
     FUNCTION = "publish"
     RETURN_TYPES = ("STRING", "STRING",)
     RETURN_NAMES = ("version_id", "info",)
@@ -456,7 +460,7 @@ class PublishToFlow:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "pipe": ("FLOW_PIPE",),
+                "flow": ("FLOW_CONTEXT",),
                 "file_path": ("STRING", {"default": ""}),
                 "description": ("STRING", {"default": "", "multiline": True}),
             },
@@ -467,19 +471,19 @@ class PublishToFlow:
             },
         }
     
-    def publish(self, pipe, file_path: str, description: str, 
+    def publish(self, flow, file_path: str, description: str, 
                 do_publish: bool = False, status: str = "rev", thumbnail=None):
-        if pipe is None:
-            return ("", "ERROR: No pipe data")
+        if flow is None:
+            return ("", "ERROR: No flow data")
         
         if not do_publish:
             return ("", "⏸ Publish disabled\nEnable 'do_publish' to upload to Flow")
         
-        session = pipe.get("session")
-        project = pipe.get("project")
-        shot = pipe.get("shot")
-        task = pipe.get("task")
-        user = pipe.get("user")
+        session = flow.get("session")
+        project = flow.get("project")
+        shot = flow.get("shot")
+        task = flow.get("task")
+        user = flow.get("user")
         
         if not all([session, project, shot]):
             return ("", "ERROR: Need project and shot in pipe")
@@ -492,7 +496,7 @@ class PublishToFlow:
             version_data = {
                 "project": {"type": "Project", "id": project["id"]},
                 "entity": {"type": "Shot", "id": shot["id"]},
-                "code": pipe.get("resolved_filename", f"v{pipe['version_number']:03d}"),
+                "code": flow.get("resolved_filename", f"v{pipe['version_number']:03d}"),
                 "description": description,
                 "sg_status_list": status,
                 "sg_path_to_frames": file_path,
@@ -559,15 +563,15 @@ class PublishToFlow:
 # FILENAME FROM PIPE NODE
 # =============================================================================
 
-class FilenameFromPipe:
+class FilenameFromFlow:
     """
-    Extract the resolved filename and output folder from the pipe.
+    Extract the resolved filename and output folder from the flow.
     Connect directly to VFX Bridge EXR Save Node:
       - filename → EXR Save filename
       - output_folder → EXR Save output_folder
     """
     
-    CATEGORY = "VFX Flow/Utils"
+    CATEGORY = "VFX Flow"
     FUNCTION = "extract"
     RETURN_TYPES = ("STRING", "STRING", "STRING",)
     RETURN_NAMES = ("filename", "output_folder", "info",)
@@ -577,7 +581,7 @@ class FilenameFromPipe:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "pipe": ("FLOW_PIPE",),
+                "flow": ("FLOW_CONTEXT",),
             },
             "optional": {
                 "suffix": ("STRING", {"default": ""}),  # e.g., "_beauty", "_CryptoObject"
@@ -585,16 +589,16 @@ class FilenameFromPipe:
             },
         }
     
-    def extract(self, pipe, suffix: str = "", base_path: str = "~/renders"):
-        if pipe is None:
-            return ("output", "", "ERROR: No pipe data")
+    def extract(self, flow, suffix: str = "", base_path: str = "~/renders"):
+        if flow is None:
+            return ("output", "", "ERROR: No flow data")
         
-        filename = pipe.get("resolved_filename", "output")
+        filename = flow.get("resolved_filename", "output")
         if suffix:
             filename = f"{filename}{suffix}"
         
-        project = pipe.get("project", {})
-        shot = pipe.get("shot", {})
+        project = flow.get("project", {})
+        shot = flow.get("shot", {})
         
         # Build output folder path
         base = os.path.expanduser(base_path)
@@ -620,7 +624,7 @@ class AddNote:
     Notes can include mentions (@user) and are visible in Flow's activity stream.
     """
     
-    CATEGORY = "VFX Flow/Publish"
+    CATEGORY = "VFX Flow"
     FUNCTION = "add_note"
     RETURN_TYPES = ("STRING", "STRING",)
     RETURN_NAMES = ("note_id", "info",)
@@ -630,7 +634,7 @@ class AddNote:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "pipe": ("FLOW_PIPE",),
+                "flow": ("FLOW_CONTEXT",),
                 "note_text": ("STRING", {"default": "", "multiline": True}),
                 "subject": ("STRING", {"default": "ComfyUI Note"}),
             },
@@ -641,10 +645,10 @@ class AddNote:
             },
         }
     
-    def add_note(self, pipe, note_text: str, subject: str,
+    def add_note(self, flow, note_text: str, subject: str,
                  attach_to: str = "shot", version_id: str = "", do_post: bool = False):
-        if pipe is None:
-            return ("", "ERROR: No pipe data")
+        if flow is None:
+            return ("", "ERROR: No flow data")
         
         if not do_post:
             return ("", "⏸ Note not posted\nEnable 'do_post' to add note to Flow")
@@ -652,14 +656,14 @@ class AddNote:
         if not note_text.strip():
             return ("", "ERROR: Note text is empty")
         
-        session = pipe.get("session")
-        project = pipe.get("project")
-        shot = pipe.get("shot")
-        task = pipe.get("task")
-        user = pipe.get("user")
+        session = flow.get("session")
+        project = flow.get("project")
+        shot = flow.get("shot")
+        task = flow.get("task")
+        user = flow.get("user")
         
         if not session or not project:
-            return ("", "ERROR: Invalid pipe data")
+            return ("", "ERROR: Invalid flow data")
         
         try:
             # Determine what to attach the note to
@@ -712,7 +716,7 @@ NODE_CLASS_MAPPINGS = {
     "ShotBrowser": ShotBrowser,
     "TaskSelector": TaskSelector,
     "PublishToFlow": PublishToFlow,
-    "FilenameFromPipe": FilenameFromPipe,
+    "FilenameFromFlow": FilenameFromFlow,
     "AddNote": AddNote,
 }
 
@@ -722,6 +726,6 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "ShotBrowser": "Shot Browser",
     "TaskSelector": "Task Selector",
     "PublishToFlow": "Publish to Flow",
-    "FilenameFromPipe": "Filename from Pipe",
+    "FilenameFromFlow": "Filename from Flow",
     "AddNote": "Add Note",
 }

@@ -1,5 +1,6 @@
 import { app } from "../../scripts/app.js";
 import { ComfyWidgets } from "../../scripts/widgets.js";
+import { api } from "../../scripts/api.js";
 
 const VFX_FLOW_NODES = [
     "FlowLogin",
@@ -7,7 +8,8 @@ const VFX_FLOW_NODES = [
     "ShotBrowser",
     "TaskSelector",
     "PublishToFlow",
-    "FilenameFromPipe"
+    "FilenameFromPipe",
+    "AddNote"
 ];
 
 // Deep teal color for Flow nodes (distinct from VFX Bridge anthracite)
@@ -15,14 +17,40 @@ const FLOW_COLOR = "#1a4a4a";
 const FLOW_COLOR_DARK = "#0d2d2d";
 const WATERMARK = "rgba(255,255,255,0.06)";
 
+// Password field masking
+function maskPasswordWidget(widget) {
+    if (!widget || !widget.inputEl) return;
+    widget.inputEl.type = "password";
+    widget.inputEl.style.letterSpacing = "2px";
+}
+
 app.registerExtension({
     name: "vfx.flow.style",
     
     async beforeRegisterNodeDef(nodeType, nodeData, app) {
         if (!VFX_FLOW_NODES.includes(nodeData.name)) return;
         
+        // Flow Login - mask password and API key
+        if (nodeData.name === "FlowLogin") {
+            const onNodeCreated = nodeType.prototype.onNodeCreated;
+            nodeType.prototype.onNodeCreated = function() {
+                onNodeCreated ? onNodeCreated.apply(this, []) : undefined;
+                
+                // Find and mask sensitive widgets
+                setTimeout(() => {
+                    for (const widget of this.widgets || []) {
+                        if (widget.name === "password" || widget.name === "api_key") {
+                            maskPasswordWidget(widget);
+                        }
+                    }
+                }, 100);
+                
+                this.color = FLOW_COLOR;
+                this.bgcolor = FLOW_COLOR_DARK;
+            };
+        }
         // Add text display for info outputs
-        if (["ProjectBrowser", "ShotBrowser", "TaskSelector", "PublishToFlow"].includes(nodeData.name)) {
+        else if (["ProjectBrowser", "ShotBrowser", "TaskSelector", "PublishToFlow", "AddNote"].includes(nodeData.name)) {
             const onNodeCreated = nodeType.prototype.onNodeCreated;
             nodeType.prototype.onNodeCreated = function() {
                 onNodeCreated ? onNodeCreated.apply(this, []) : undefined;
@@ -31,6 +59,7 @@ app.registerExtension({
                 this.infoWidget.inputEl.readOnly = true;
                 this.infoWidget.inputEl.style.opacity = 0.8;
                 this.infoWidget.inputEl.style.fontSize = "11px";
+                this.infoWidget.inputEl.style.minHeight = "60px";
                 this.infoWidget.serializeValue = async () => "";
                 
                 this.color = FLOW_COLOR;
