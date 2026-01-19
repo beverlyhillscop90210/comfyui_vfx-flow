@@ -23,3 +23,4 @@ Thumbs.db
 .env.*
 credentials.json
 api_keys.txt
+.env
