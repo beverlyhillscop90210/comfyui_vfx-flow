@@ -37,6 +37,7 @@ _flow_sessions = {}  # Cache for sessions
 class FlowLogin:
     """
     Connect to Autodesk Flow (ShotGrid).
+    Supports both Script-based (API key) and User-based (login/password) authentication.
     Credentials can be provided directly or via environment variables.
     """
     
@@ -51,19 +52,35 @@ class FlowLogin:
         return {
             "required": {
                 "site_url": ("STRING", {"default": os.environ.get("FLOW_SITE_URL", "https://your-studio.shotgrid.autodesk.com")}),
+                "auth_method": (["script", "user"], {"default": "script"}),
+            },
+            "optional": {
+                # Script-based auth
                 "script_name": ("STRING", {"default": os.environ.get("FLOW_SCRIPT_NAME", "comfyui_vfx_flow")}),
                 "api_key": ("STRING", {"default": os.environ.get("FLOW_API_KEY", "")}),
+                # User-based auth
+                "login": ("STRING", {"default": os.environ.get("FLOW_LOGIN", "")}),
+                "password": ("STRING", {"default": os.environ.get("FLOW_PASSWORD", "")}),
             },
         }
     
-    def login(self, site_url: str, script_name: str, api_key: str):
+    def login(self, site_url: str, auth_method: str, 
+              script_name: str = "", api_key: str = "",
+              login: str = "", password: str = ""):
         if not HAS_SHOTGUN:
             return (None, "ERROR: shotgun_api3 not installed\npip install shotgun_api3")
         
-        if not api_key:
-            return (None, "ERROR: No API key provided\nSet FLOW_API_KEY env var or enter directly")
-        
-        cache_key = f"{site_url}:{script_name}"
+        # Determine auth type
+        if auth_method == "user":
+            if not login or not password:
+                return (None, "ERROR: login and password required for user auth")
+            cache_key = f"{site_url}:user:{login}"
+            auth_info = f"User: {login}"
+        else:
+            if not api_key:
+                return (None, "ERROR: No API key provided\nSet FLOW_API_KEY env var or enter directly")
+            cache_key = f"{site_url}:script:{script_name}"
+            auth_info = f"Script: {script_name}"
         
         # Check cache
         if cache_key in _flow_sessions:
@@ -71,22 +88,30 @@ class FlowLogin:
             try:
                 # Test connection
                 sg.find_one("Project", [], ["name"])
-                return (sg, f"Connected (cached): {site_url}")
+                return (sg, f"✓ Connected (cached)\n{site_url}\n{auth_info}")
             except:
                 del _flow_sessions[cache_key]
         
         try:
-            sg = shotgun_api3.Shotgun(
-                site_url,
-                script_name=script_name,
-                api_key=api_key
-            )
+            if auth_method == "user":
+                sg = shotgun_api3.Shotgun(
+                    site_url,
+                    login=login,
+                    password=password
+                )
+            else:
+                sg = shotgun_api3.Shotgun(
+                    site_url,
+                    script_name=script_name,
+                    api_key=api_key
+                )
+            
             # Test connection
             sg.find_one("Project", [], ["name"])
             _flow_sessions[cache_key] = sg
             
-            status = f"Connected: {site_url}"
-            print(f"[VFX Flow] {status}")
+            status = f"✓ Connected\n{site_url}\n{auth_info}"
+            print(f"[VFX Flow] Connected to {site_url} via {auth_method}")
             return (sg, status)
             
         except Exception as e:
@@ -407,11 +432,12 @@ class PublishToFlow:
             "optional": {
                 "do_publish": ("BOOLEAN", {"default": False}),  # Must explicitly enable
                 "status": (["rev", "vwd", "apr"], {"default": "rev"}),  # Pending Review, Viewed, Approved
+                "thumbnail": ("IMAGE",),  # Optional thumbnail image
             },
         }
     
     def publish(self, pipe, file_path: str, description: str, 
-                do_publish: bool = False, status: str = "rev"):
+                do_publish: bool = False, status: str = "rev", thumbnail=None):
         if pipe is None:
             return ("", "ERROR: No pipe data")
         
@@ -449,17 +475,49 @@ class PublishToFlow:
             
             version = session.create("Version", version_data)
             
-            # Upload thumbnail if image file
-            if file_path.lower().endswith(('.exr', '.jpg', '.png', '.tif', '.tiff')):
+            # Upload thumbnail
+            thumbnail_status = ""
+            if thumbnail is not None:
+                try:
+                    import tempfile
+                    import numpy as np
+                    from PIL import Image
+                    
+                    # Convert tensor to image
+                    if hasattr(thumbnail, 'cpu'):
+                        img_array = thumbnail.cpu().numpy()
+                    else:
+                        img_array = np.array(thumbnail)
+                    
+                    # Handle batch dimension
+                    if len(img_array.shape) == 4:
+                        img_array = img_array[0]
+                    
+                    # Convert to 8-bit
+                    img_array = (np.clip(img_array, 0, 1) * 255).astype(np.uint8)
+                    img = Image.fromarray(img_array)
+                    
+                    # Save temp file
+                    with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
+                        img.save(tmp.name, "JPEG", quality=85)
+                        session.upload_thumbnail("Version", version["id"], tmp.name)
+                        os.unlink(tmp.name)
+                    
+                    thumbnail_status = "\n✓ Thumbnail uploaded"
+                except Exception as e:
+                    thumbnail_status = f"\n⚠ Thumbnail failed: {str(e)}"
+            elif file_path.lower().endswith(('.jpg', '.png', '.tif', '.tiff')):
+                # Try using the file itself as thumbnail
                 try:
                     session.upload_thumbnail("Version", version["id"], file_path)
+                    thumbnail_status = "\n✓ Thumbnail from file"
                 except:
-                    pass  # Thumbnail upload is optional
+                    pass
             
             version_id = str(version["id"])
-            info = f"✓ Published to Flow!\nVersion ID: {version_id}\nCode: {version_data['code']}\nStatus: {status}"
+            info = f"✓ Published to Flow!\nVersion ID: {version_id}\nCode: {version_data['code']}\nStatus: {status}{thumbnail_status}"
             
-            print(f"[VFX Flow] {info}")
+            print(f"[VFX Flow] Published version {version_id}")
             return (version_id, info)
             
         except Exception as e:
@@ -513,6 +571,98 @@ class FilenameFromPipe:
 
 
 # =============================================================================
+# ADD NOTE NODE
+# =============================================================================
+
+class AddNote:
+    """
+    Add a note/comment to a shot, version, or task in Flow.
+    Notes can include mentions (@user) and are visible in Flow's activity stream.
+    """
+    
+    CATEGORY = "VFX Flow/Publish"
+    FUNCTION = "add_note"
+    RETURN_TYPES = ("STRING", "STRING",)
+    RETURN_NAMES = ("note_id", "info",)
+    OUTPUT_NODE = True
+    
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "pipe": ("FLOW_PIPE",),
+                "note_text": ("STRING", {"default": "", "multiline": True}),
+                "subject": ("STRING", {"default": "ComfyUI Note"}),
+            },
+            "optional": {
+                "attach_to": (["shot", "task", "version"], {"default": "shot"}),
+                "version_id": ("STRING", {"default": ""}),  # From PublishToFlow
+                "do_post": ("BOOLEAN", {"default": False}),  # Safety toggle
+            },
+        }
+    
+    def add_note(self, pipe, note_text: str, subject: str,
+                 attach_to: str = "shot", version_id: str = "", do_post: bool = False):
+        if pipe is None:
+            return ("", "ERROR: No pipe data")
+        
+        if not do_post:
+            return ("", "⏸ Note not posted\nEnable 'do_post' to add note to Flow")
+        
+        if not note_text.strip():
+            return ("", "ERROR: Note text is empty")
+        
+        session = pipe.get("session")
+        project = pipe.get("project")
+        shot = pipe.get("shot")
+        task = pipe.get("task")
+        user = pipe.get("user")
+        
+        if not session or not project:
+            return ("", "ERROR: Invalid pipe data")
+        
+        try:
+            # Determine what to attach the note to
+            note_links = []
+            link_info = ""
+            
+            if attach_to == "version" and version_id:
+                note_links.append({"type": "Version", "id": int(version_id)})
+                link_info = f"Version {version_id}"
+            elif attach_to == "task" and task:
+                note_links.append({"type": "Task", "id": task["id"]})
+                link_info = f"Task: {task['name']}"
+            elif shot:
+                note_links.append({"type": "Shot", "id": shot["id"]})
+                link_info = f"Shot: {shot['code']}"
+            else:
+                return ("", "ERROR: No valid entity to attach note to")
+            
+            # Create note
+            note_data = {
+                "project": {"type": "Project", "id": project["id"]},
+                "subject": subject,
+                "content": note_text,
+                "note_links": note_links,
+            }
+            
+            # Add author if we have user info
+            if user and user.get("id"):
+                note_data["user"] = {"type": "HumanUser", "id": user["id"]}
+            
+            note = session.create("Note", note_data)
+            
+            note_id = str(note["id"])
+            info = f"✓ Note posted!\nNote ID: {note_id}\nAttached to: {link_info}\nSubject: {subject}"
+            
+            print(f"[VFX Flow] Posted note {note_id}")
+            return (note_id, info)
+            
+        except Exception as e:
+            return ("", f"ERROR: {str(e)}")
+
+
+# =============================================================================
 # NODE MAPPINGS
 # =============================================================================
 
@@ -523,6 +673,7 @@ NODE_CLASS_MAPPINGS = {
     "TaskSelector": TaskSelector,
     "PublishToFlow": PublishToFlow,
     "FilenameFromPipe": FilenameFromPipe,
+    "AddNote": AddNote,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -532,4 +683,5 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "TaskSelector": "Task Selector",
     "PublishToFlow": "Publish to Flow",
     "FilenameFromPipe": "Filename from Pipe",
+    "AddNote": "Add Note",
 }
