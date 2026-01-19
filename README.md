@@ -184,19 +184,26 @@ All pipeline data flows through the `pipe`:
 ## Workflow Example
 
 ```
-Flow Login
-    ↓
-Project Browser (select project)
-    ↓ pipe
-Shot Browser (select shot → auto "In Progress")
-    ↓ pipe + latest_version_path
-Task Selector (assign yourself)
-    ↓ pipe
-    ├──→ Filename from Pipe → EXR Save Node (VFX Bridge)
-    │
-    └──→ [Your Processing...]
-            ↓
-         Publish to Flow [do_publish: true]
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  VFX FLOW                           VFX BRIDGE                              │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  Flow Login                                                                 │
+│      ↓                                                                      │
+│  Project Browser                                                            │
+│      ↓ pipe                                                                 │
+│  Shot Browser ─────────────────→ folder_path ──→ EXR Hot Folder Loader     │
+│      ↓ pipe                                              ↓                  │
+│  Task Selector                                      [Processing...]         │
+│      ↓ pipe                                              ↓                  │
+│  Filename from Pipe ───────────→ filename ───────→ EXR Save Node           │
+│      │                          output_folder ─────────↗   ↓                │
+│      ↓ pipe                                          saved_path             │
+│  Publish to Flow ←─────────────────────────────────────────┘                │
+│      ↓                                                                      │
+│  [Version in ShotGrid] ✓                                                    │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
@@ -205,25 +212,25 @@ Task Selector (assign yourself)
 
 This package is designed to work seamlessly with [VFX Bridge](https://github.com/beverlyhillscop90210/comfyui_vfx-bridge).
 
-### Load Latest Version
+### Load Shot → Process → Save → Publish
 
-Use `latest_version_path` from Shot Browser with EXR Hot Folder Loader:
+**Direct connections:**
 
-```
-Shot Browser
-    ↓ latest_version_path
-EXR Hot Folder Loader (folder_path)
-```
+| VFX Flow Output | → | VFX Bridge Input |
+|-----------------|---|------------------|
+| Shot Browser `folder_path` | → | EXR Hot Folder Loader `folder_path` |
+| Filename from Pipe `filename` | → | EXR Save `filename` |
+| Filename from Pipe `output_folder` | → | EXR Save `output_folder` |
+| EXR Save `saved_path` | → | Publish to Flow `file_path` |
 
-### Save with Pipeline Naming
+### Quick Setup
 
-Use `Filename from Pipe` with EXR Save Node:
+1. **Load**: Shot Browser's `folder_path` connects directly to EXR Hot Folder Loader
+2. **Process**: Your ComfyUI workflow (denoise, upscale, color grade, etc.)
+3. **Save**: Filename from Pipe outputs connect to EXR Save Node
+4. **Publish**: EXR Save's `saved_path` connects to Publish to Flow
 
-```
-Filename from Pipe
-    ↓ filename
-EXR Save Node
-```
+All naming is automatic based on your Flow context!
 
 ---
 
@@ -235,16 +242,18 @@ EXR Save Node
 
 ## Roadmap
 
-- [x] Flow Login with environment variable support
+- [x] Flow Login with user/script auth
 - [x] Project Browser
 - [x] Shot Browser with status updates
 - [x] Task Selector with assignment
 - [x] Publish to Flow with safety toggle
-- [x] Filename from Pipe
+- [x] Filename from Pipe with output folder
+- [x] Thumbnail upload
+- [x] Add Note
+- [x] Direct VFX Bridge integration
 - [ ] Asset Browser
 - [ ] Playlist creation
-- [ ] Thumbnail upload
-- [ ] Note creation
+- [ ] Sequence Browser
 
 ## License
 

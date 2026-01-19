@@ -227,12 +227,13 @@ class ShotBrowser:
     """
     Browse and select a shot from the project.
     Automatically sets shot status to "In Progress" when selected.
+    Outputs folder_path for direct connection to VFX Bridge EXR Loader.
     """
     
     CATEGORY = "VFX Flow/Browse"
     FUNCTION = "browse"
-    RETURN_TYPES = ("FLOW_PIPE", "STRING", "STRING",)
-    RETURN_NAMES = ("pipe", "latest_version_path", "info",)
+    RETURN_TYPES = ("FLOW_PIPE", "STRING", "STRING", "STRING",)
+    RETURN_NAMES = ("pipe", "folder_path", "latest_file", "info",)
     OUTPUT_NODE = True
     
     @classmethod
@@ -249,13 +250,13 @@ class ShotBrowser:
     
     def browse(self, pipe, shot_code: str, set_in_progress: bool = True):
         if pipe is None:
-            return (None, "", "ERROR: No pipe data")
+            return (None, "", "", "ERROR: No pipe data")
         
         session = pipe.get("session")
         project = pipe.get("project")
         
         if not session or not project:
-            return (None, "", "ERROR: Invalid pipe data")
+            return (None, "", "", "ERROR: Invalid pipe data")
         
         try:
             # Find shots
@@ -270,7 +271,7 @@ class ShotBrowser:
             )
             
             if not shots:
-                return (pipe, "", "No shots found")
+                return (pipe, "", "", "No shots found")
             
             shot = shots[0]
             sequence = shot.get("sg_sequence", {})
@@ -290,12 +291,16 @@ class ShotBrowser:
                 limit=1
             )
             
-            latest_path = ""
+            latest_file = ""
+            folder_path = ""
             version_num = 1
             if versions:
                 v = versions[0]
-                latest_path = v.get("sg_path_to_frames") or v.get("sg_path_to_movie") or ""
+                latest_file = v.get("sg_path_to_frames") or v.get("sg_path_to_movie") or ""
                 version_num = (v.get("version_number") or 0) + 1
+                # Extract folder from file path for VFX Bridge EXR Loader
+                if latest_file:
+                    folder_path = os.path.dirname(latest_file)
             
             # Update pipe
             pipe = pipe.copy()
@@ -308,6 +313,7 @@ class ShotBrowser:
             }
             pipe["version_number"] = version_num
             pipe["resolved_filename"] = f"{project['name']}_{seq_name}_{shot['code']}_v{version_num:03d}"
+            pipe["folder_path"] = folder_path  # Store for later use
             
             # Build info
             info_lines = [
@@ -316,14 +322,16 @@ class ShotBrowser:
                 f"Status: {'In Progress' if set_in_progress else shot.get('sg_status_list', 'N/A')}",
                 f"Next Version: v{version_num:03d}",
             ]
-            if latest_path:
-                info_lines.append(f"Latest: {os.path.basename(latest_path)}")
+            if folder_path:
+                info_lines.append(f"Folder: {folder_path}")
+            if latest_file:
+                info_lines.append(f"Latest: {os.path.basename(latest_file)}")
             
             info = "\n".join(info_lines)
-            return (pipe, latest_path, info)
+            return (pipe, folder_path, latest_file, info)
             
         except Exception as e:
-            return (pipe, "", f"ERROR: {str(e)}")
+            return (pipe, "", "", f"ERROR: {str(e)}")
 
 
 # =============================================================================
@@ -553,14 +561,16 @@ class PublishToFlow:
 
 class FilenameFromPipe:
     """
-    Extract the resolved filename from the pipe.
-    Use this to pass to EXR Save Node for consistent naming.
+    Extract the resolved filename and output folder from the pipe.
+    Connect directly to VFX Bridge EXR Save Node:
+      - filename → EXR Save filename
+      - output_folder → EXR Save output_folder
     """
     
     CATEGORY = "VFX Flow/Utils"
     FUNCTION = "extract"
     RETURN_TYPES = ("STRING", "STRING", "STRING",)
-    RETURN_NAMES = ("filename", "folder_suggestion", "info",)
+    RETURN_NAMES = ("filename", "output_folder", "info",)
     OUTPUT_NODE = False
     
     @classmethod
@@ -571,10 +581,11 @@ class FilenameFromPipe:
             },
             "optional": {
                 "suffix": ("STRING", {"default": ""}),  # e.g., "_beauty", "_CryptoObject"
+                "base_path": ("STRING", {"default": "~/renders"}),  # Base render folder
             },
         }
     
-    def extract(self, pipe, suffix: str = ""):
+    def extract(self, pipe, suffix: str = "", base_path: str = "~/renders"):
         if pipe is None:
             return ("output", "", "ERROR: No pipe data")
         
@@ -585,12 +596,18 @@ class FilenameFromPipe:
         project = pipe.get("project", {})
         shot = pipe.get("shot", {})
         
-        # Suggest folder structure
-        folder = f"{project.get('name', 'project')}/{shot.get('sequence', 'SEQ')}/{shot.get('code', 'shot')}/render"
+        # Build output folder path
+        base = os.path.expanduser(base_path)
+        output_folder = os.path.join(
+            base,
+            project.get("name", "project"),
+            shot.get("sequence", "SEQ"),
+            shot.get("code", "shot")
+        )
         
-        info = f"Filename: {filename}\nFolder: {folder}"
+        info = f"Filename: {filename}\nOutput: {output_folder}/{filename}.exr"
         
-        return (filename, folder, info)
+        return (filename, output_folder, info)
 
 
 # =============================================================================
