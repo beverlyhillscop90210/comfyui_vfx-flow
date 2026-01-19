@@ -28,21 +28,34 @@ pip install -r requirements.txt
 
 ---
 
-## Setup
+## Authentication
 
-### Environment Variables (Recommended)
+### User Login (Recommended) ✅
 
+The simplest way to connect—use your own Flow/ShotGrid account:
+
+1. Set `auth_method` to **user**
+2. Enter your Flow **login** (email)
+3. Enter your **password**
+
+This is the recommended method for artists working interactively. Each user logs in with their own credentials, so permissions and tracking work correctly.
+
+### Script API Key (For Automation)
+
+For render farms, batch processing, or automated pipelines where no user is present:
+
+1. Go to Admin → Scripts in Flow
+2. Create new script: `comfyui_vfx_flow`
+3. Copy the API key
+4. Set `auth_method` to **script**
+5. Enter `script_name` and `api_key`
+
+Optionally set environment variables:
 ```bash
 export FLOW_SITE_URL="https://your-studio.shotgrid.autodesk.com"
 export FLOW_SCRIPT_NAME="comfyui_vfx_flow"
 export FLOW_API_KEY="your_api_key_here"
 ```
-
-### Create Script User in Flow
-
-1. Go to Admin → Scripts
-2. Create new script: `comfyui_vfx_flow`
-3. Copy the API key
 
 ---
 
@@ -50,12 +63,15 @@ export FLOW_API_KEY="your_api_key_here"
 
 ### Flow Login
 
-Establishes a connection to your Flow/ShotGrid instance. Supports both environment variables and direct input for credentials.
+Establishes a connection to your Flow/ShotGrid instance. Supports both user-based and script-based authentication.
 
 **Inputs:**
 - `site_url` (STRING): Your Flow site URL (e.g., https://studio.shotgrid.autodesk.com)
-- `script_name` (STRING): API script name
-- `api_key` (STRING): API key for authentication
+- `auth_method` (COMBO): **user** (recommended) or **script**
+- `login` (STRING): Your email (for user auth)
+- `password` (STRING): Your password (for user auth)
+- `script_name` (STRING): API script name (for script auth)
+- `api_key` (STRING): API key (for script auth)
 
 **Outputs:**
 - `session` (FLOW_SESSION): Active connection for downstream nodes

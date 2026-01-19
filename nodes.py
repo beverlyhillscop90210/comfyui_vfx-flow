@@ -75,7 +75,7 @@ class FlowLogin:
         return {
             "required": {
                 "site_url": ("STRING", {"default": os.environ.get("FLOW_SITE_URL", "https://your-studio.shotgrid.autodesk.com")}),
-                "auth_method": (["script", "user"], {"default": "script"}),
+                "auth_method": (["user", "script"], {"default": "user"}),
             },
             "optional": {
                 # Script-based auth
