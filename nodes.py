@@ -9,6 +9,29 @@ Browse projects, shots, tasks - with automatic status updates and publishing.
 import os
 import json
 from typing import Optional, Dict, Any, List, Tuple
+from pathlib import Path
+
+# Load .env file if it exists (for credentials)
+def _load_env_file():
+    env_paths = [
+        Path(__file__).parent / ".env",
+        Path.home() / ".comfyui_vfx_flow.env",
+    ]
+    for env_path in env_paths:
+        if env_path.exists():
+            try:
+                with open(env_path) as f:
+                    for line in f:
+                        line = line.strip()
+                        if line and not line.startswith("#") and "=" in line:
+                            key, value = line.split("=", 1)
+                            os.environ.setdefault(key.strip(), value.strip())
+                print(f"[VFX Flow] Loaded credentials from {env_path}")
+                return
+            except Exception as e:
+                print(f"[VFX Flow] Failed to load {env_path}: {e}")
+
+_load_env_file()
 
 # Try to import shotgun_api3
 try:
